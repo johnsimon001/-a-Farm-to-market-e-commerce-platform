@@ -1,100 +1,172 @@
-# -a-Farm-to-market-e-commerce-platform
+django-admin startproject agri_ecom
+cd agri_ecom
+python manage.py startapp store
 from django.db import models
 from django.contrib.auth.models import User
 
+
 class Product(models.Model):
     name = models.CharField(max_length=255)
-    description = models.TextField()
-    quantity = models.IntegerField()
+    description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    farmer = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return self.name
+
+
+class Supplier(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    address = models.CharField(max_length=255)
+    phone_number = models.CharField(max_length=20)
+    products = models.ManyToManyField(Product, through='Supply')
+
+    def __str__(self):
+        return self.user.username
+
+
+class Supply(models.Model):
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.PositiveIntegerField()
+
+    def __str__(self):
+        return f"{self.supplier.user.username} - {self.product.name}"
+
 
 class Order(models.Model):
-    buyer = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
-    total_price = models.DecimalField(max_digits=10, decimal_places=2)
-    date_ordered = models.DateTimeField(auto_now_add=True)
+    quantity = models.PositiveIntegerField()
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
+    date = models.DateTimeField(auto_now_add=True)
 
-class Review(models.Model):
-    buyer = models.ForeignKey(User, on_delete=models.CASCADE)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    rating = models.IntegerField()
-    comment = models.TextField()
-    date_added = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return f"{self.user.username} - {self.product.name}"
+# ...
 
-class Delivery(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE)
-    delivery_address = models.TextField()
-    delivery_date = models.DateTimeField()
+INSTALLED_APPS = [
+    # ...
+    'store',
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+]
 
-class Payment(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE)
-    payment_date = models.DateTimeField()
-    payment_amount = models.DecimalField(max_digits=10, decimal_places=2)
+# ...
+
+# Add the following at the end of the file
+
+# Authentication Configuration
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/'
+
+# ...
+from django import forms
+from django.contrib.auth.forms import UserCreationForm, AuthenticationForm
+from .models import Order
+
+
+class RegistrationForm(UserCreationForm):
+    address = forms.CharField(max_length=255)
+    phone_number = forms.CharField(max_length=20)
+
+    class Meta:
+        model = User
+        fields = ['username', 'password1', 'password2', 'address', 'phone_number']
+
+
+class LoginForm(AuthenticationForm):
+    class Meta:
+        model = User
+        fields = ['username', 'password']
+
+
+class OrderForm(forms.ModelForm):
+    class Meta:
+        model = Order
+        fields = ['product', 'quantity']
+        widgets = {
+            'product': forms.Select(attrs={'class': 'form-control'}),
+            'quantity': forms.NumberInput(attrs={'class': 'form-control'}),
+        }
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
-from django.contrib import messages
-from .models import Product, Order, Review, Delivery, Payment
-from .forms import ProductForm, OrderForm, ReviewForm, DeliveryForm, PaymentForm
+from .models import Product, Supplier, Order
+from .forms import RegistrationForm, LoginForm, OrderForm
 
-@login_required
-def product_list(request):
+
+def index(request):
     products = Product.objects.all()
     context = {'products': products}
-    return render(request, 'product_list.html', context)
+    return render(request, 'store/index.html', context)
 
-@login_required
+
+def suppliers(request):
+    suppliers = Supplier.objects.all()
+    context = {'suppliers': suppliers}
+    return render(request, 'store/suppliers.html', context)
+
+
 def product_detail(request, product_id):
     product = Product.objects.get(id=product_id)
-    reviews = Review.objects.filter(product=product)
-    context = {'product': product, 'reviews': reviews}
-    return render(request, 'product_detail.html', context)
+    supplies = product.supply_set.all()
+    context = {'product': product, 'supplies': supplies}
+    return render(request, 'store/product_detail.html', context)
+
 
 @login_required
-def product_create(request):
-    if request.method == 'POST':
-        form = ProductForm(request.POST)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Product created successfully')
-            return redirect('product_list')
-    else:
-        form = ProductForm()
-    context = {'form': form}
-    return render(request, 'product_create.html', context)
-
-@login_required
-def product_update(request, product_id):
-    product = Product.objects.get(id=product_id)
-    if request.method == 'POST':
-        form = ProductForm(request.POST, instance=product)
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Product updated successfully')
-            return redirect('product_list')
-    else:
-        form = ProductForm(instance=product)
-    context = {'form': form, 'product': product}
-    return render(request, 'product_update.html', context)
-
-login_required
-def order_create(request, product_id):
-    product = Product.objects.get(id=product_id)
+def order(request):
     if request.method == 'POST':
         form = OrderForm(request.POST)
         if form.is_valid():
             order = form.save(commit=False)
-            order.buyer = request.user
-            order.product = product
-            order.total_price = order.quantity * product.price
+            order.user = request.user
+            order.supplier = Supplier.objects.get(user=order.product.supplier.user)
             order.save()
-            messages.success(request, 'Order created successfully')
-            return redirect('order_list')
+            return redirect('orders')
     else:
         form = OrderForm()
-    context = {'form': form, 'product': product}
-    return render(request, 'order_create.html', context)
+    context = {'form': form}
+    return render(request, 'store/order.html', context)
 
 
+@login_required
+def orders(request):
+    user = request.user
+    orders = Order.objects.filter(user=user)
+    context = {'orders': orders}
+    return render(request, 'store/orders.html', context)
 
+
+def register(request):
+    if request.method == 'POST':
+        form = RegistrationForm(request.POST)
+        if form.is_valid():
+            form.save()
+            return redirect('login')
+    else:
+        form = RegistrationForm()
+    context = {'form': form}
+    return render(request, 'store/register.html', context)
+
+
+def login(request):
+    if request.method == 'POST':
+        form = LoginForm(data=request.POST)
+        if form.is_valid():
+            user = form.get_user()
+            auth_login(request, user)
+            return redirect('index')
+    else:
+        form = LoginForm()
+    context = {'form': form}
+    return render(request, 'store/login.html', context)
+
+
+def logout(request):
+    auth_logout(request)
+    return redirect('index')
